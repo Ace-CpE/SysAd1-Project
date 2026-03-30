@@ -102,3 +102,6 @@ renew_psswrd() {
     unset newpass specials
     echo "Password Successfully Renewed."
 }
+
+ini_password
+authenticate
