@@ -1,125 +1,116 @@
 #!/bin/bash
-# MAIN SYSTEM CONTROLLER
+# Main System Master Controller - SysAd Project
+ 
+source "$(dirname "$0")/backup_system.sh"
+ 
+echo "Initializing Project System..."
+backup_dirs
+daily_folder
+ 
+if ! pgrep -x "inotifywait" > /dev/null; then
+    start_inotify
+fi
+ 
+start_backup_monitor
+ 
+auto_cleanup
+ 
+while true; do
+    echo "------------------------------------------"
+    echo "   SYSAD PROJECT: BACKUP & SECURITY"
+    echo "------------------------------------------"
+    echo "  Base Directory  : $base_dir"
+    echo "  Monitored Folder: $watch_dir"
+    echo "------------------------------------------"
+    echo "1. Run Manual Cleanup Check (30-day rule)"
+    echo "2. ACCESS MAIN BACKUP FOLDER (SECURITY)"
+    echo "3. View System Logs & Alerts"
+    echo "4. Recover a Deleted File"
+    echo "5. Check for Duplicate Files"
+    echo "6. Reset Admin Password"
+    echo "7. Stop Monitor & Exit"
+    echo "------------------------------------------"
+    read -p "Select Option: " opt
+ 
+    case $opt in
+        1)
+            auto_cleanup
+            echo "Cleanup check complete." ;;
+        2)
+            if bash "$(dirname "$0")/security_system.sh"; then
+                echo "Access Granted."
+                ls -R "$main_backup"
+            else
+                echo "$(date): SECURITY BREACH ATTEMPT" >> "$main_backup/alerts.log"
+                echo "ALERT: Breach attempt has been logged."
+            fi ;;
+        3)
+            echo "--- BACKUP LOGS ---"
+            [ -f "$log_file" ] && tail -n 10 "$log_file" || echo "No logs yet."
+            echo ""
+            echo "--- SECURITY ALERTS ---"
+            [ -f "$main_backup/alerts.log" ] && tail -n 5 "$main_backup/alerts.log" || echo "No alerts." ;;
+        4)
+            read -p "Filename to recover (e.g., test.txt): " fname
+            read -p "Enter recovery path (e.g., ./monitored_files/): " rpath
+            backup_recovered "$fname" "$rpath" ;;
+        5)
+            check_all_duplicates ;;
+        6)
+            echo "--- Renew Admin Password (SECURE RESET) ---"
 
-set -euo pipefail
+    # Ask for current password
+    read -s -p "Enter CURRENT password: " currentpass
+    echo ""
 
-# ─────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────
-ADMIN_EMAIL="admin@example.com"
+    # Read stored hash
+    stored_hash=$(cat /etc/project_auth)
 
-BACKUP_SCRIPT="/root/backup_system.sh"
-SECURITY_SCRIPT="/root/security_system.sh"
-RECOVERY_SCRIPT="/root/recovery_system.sh"
+    # Verify current password
+    input_hash=$(openssl passwd -6 "$currentpass")
 
-LOG_FILE="/root/main_system.log"
-
-# ─────────────────────────────────────────────
-# EMAIL NOTIFICATION FUNCTION
-# ─────────────────────────────────────────────
-send_alert() {
-    local subject="$1"
-    local message="$2"
-
-    echo "$message" | mail -s "$subject" "$ADMIN_EMAIL"
-}
-
-# ─────────────────────────────────────────────
-# START BACKUP SYSTEM (AUTO RUN)
-# ─────────────────────────────────────────────
-start_backup() {
-    echo "[INFO] Starting Backup System..." >> "$LOG_FILE"
-
-    if ! bash "$BACKUP_SCRIPT" & then
-        send_alert "BACKUP SYSTEM FAILURE" \
-        "Backup system failed to start or crashed."
+    if [[ "$input_hash" != "$stored_hash" ]]; then
+        echo "ERROR: Incorrect current password."
+        log_activity "SECURITY" "PASSWORD_RESET_FAILED" "Wrong current password used"
+        unset currentpass
+        break
     fi
-}
 
-# ─────────────────────────────────────────────
-# CHECK PASSWORD EXPIRATION
-# ─────────────────────────────────────────────
-check_security_status() {
-    META_FILE="/etc/project_auth_meta"
-    MAX_DAYS=7
+    # Ask for new password
+    read -s -p "Enter NEW password: " newpass
+    echo
+    read -s -p "Confirm NEW password: " confirm
+    echo
 
-    if [ -f "$META_FILE" ]; then
-        last_change=$(cat "$META_FILE")
-        days=$(( ( $(date +%s) - last_change ) / 86400 ))
+    # Validation rules
+    specials=$(echo "$newpass" | grep -o '[^a-zA-Z0-9]' | wc -l)
 
-        if [ "$days" -ge "$MAX_DAYS" ]; then
-            send_alert "SECURITY ALERT: PASSWORD EXPIRED" \
-            "System password has expired. Immediate action required."
-        fi
-    fi
-}
-
-# ─────────────────────────────────────────────
-# RECOVERY ACCESS (WITH SECURITY)
-# ─────────────────────────────────────────────
-access_recovery() {
-    echo "======================================="
-    echo "  SECURE ACCESS TO BACKUP RECOVERY"
-    echo "======================================="
-
-    # Run security check BEFORE allowing recovery
-    if bash "$SECURITY_SCRIPT"; then
-        bash "$RECOVERY_SCRIPT"
+    if [[ "$newpass" != "$confirm" ]]; then
+        echo "ERROR: Passwords do not match."
+    elif ! [[ -n "$newpass" && ${#newpass} -ge 6 \
+         && "$newpass" =~ [A-Z] \
+         && "$newpass" =~ [0-9] \
+         && $specials -eq 1 ]]; then
+        echo "Password must be at least 6 chars, 1 uppercase, 1 number, 1 special char."
     else
-        echo "Access denied."
+        # Save new hashed password
+        openssl passwd -6 "$newpass" > /etc/project_auth
+        date +%s > /etc/project_auth_meta
+        chmod 600 /etc/project_auth /etc/project_auth_meta
+
+        echo "SUCCESS: Password successfully renewed."
+        log_activity "SECURITY" "PASSWORD_RENEWED" "Admin password changed securely"
     fi
-}
 
-# ─────────────────────────────────────────────
-# MAIN MENU
-# ─────────────────────────────────────────────
-main_menu() {
-    while true; do
-        echo
-        echo "========== MAIN SYSTEM =========="
-        echo "[1] Start Backup System (Auto)"
-        echo "[2] Access Recovery System"
-        echo "[3] Check Security Status"
-        echo "[0] Exit"
-        echo "================================"
-        read -rp "Choose option: " choice
-
-        case "$choice" in
-            1)
-                start_backup
-                ;;
-            2)
-                access_recovery
-                ;;
-            3)
-                check_security_status
-                echo "Security check complete."
-                ;;
-            0)
-                echo "Exiting..."
-                exit 0
-                ;;
-            *)
-                echo "Invalid option."
-                ;;
-        esac
-    done
-}
-
-# ─────────────────────────────────────────────
-# AUTO START (WHEN VM RUNS)
-# ─────────────────────────────────────────────
-
-# Automatically start backup in background
-start_backup
-
-# Periodically check security (every 1 hour)
-(
-    while true; do
-        check_security_status
-        sleep 3600
-    done
-) &
-
-# Run menu
-main_menu
+    unset currentpass newpass confirm specials
+    ;;
+        7)
+            echo "Stopping monitor..."
+            stop_monitoring
+            stop_backup_monitor
+            exit 0 ;;
+        *)
+            echo "Invalid option. Please choose 1-7." ;;
+    esac
+    read -p "Press Enter to continue..."
+done
